@@ -1,0 +1,47 @@
+{
+  "version": 2,
+  "departments": [
+    {
+      "id": "geodesy",
+      "title": "Отдел геодезии",
+      "years": [
+        {
+          "year": 2020,
+          "file": "geodesy/2020.geojson",
+          "count": 118,
+          "color": "#3875BD"
+        },
+        {
+          "year": 2021,
+          "file": "geodesy/2021.geojson",
+          "count": 112,
+          "color": "#1B9C86"
+        },
+        {
+          "year": 2022,
+          "file": "geodesy/2022.geojson",
+          "count": 137,
+          "color": "#DC9B35"
+        },
+        {
+          "year": 2023,
+          "file": "geodesy/2023.geojson",
+          "count": 219,
+          "color": "#9063B5"
+        },
+        {
+          "year": 2024,
+          "file": "geodesy/2024.geojson",
+          "count": 148,
+          "color": "#D86C69"
+        },
+        {
+          "year": 2025,
+          "file": "geodesy/2025.geojson",
+          "count": 196,
+          "color": "#2469AA"
+        }
+      ]
+    }
+  ]
+}
