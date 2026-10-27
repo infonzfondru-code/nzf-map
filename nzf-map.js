@@ -1,337 +1,616 @@
-/* NZF map v2: department/year tree + KML semantics. */
-(() => {
+/* NZF projects map, Yandex Maps JS API 2.1. Data: GitHub Pages. No API key is stored here. */
+(function () {
   'use strict';
-  const byId = id => document.getElementById(id);
-  const scriptBase = new URL('./', document.baseURI);
-  const dataBase = scriptBase;
-  const dataUrl = file => new URL(String(file).split('/').map(encodeURIComponent).join('/'), dataBase).toString();
-  const statusText = byId('statusText');
-  const departmentList = byId('departmentList');
-  const resultsEl = byId('searchResults');
-  const searchEl = byId('searchInput');
-  const LOCALE = 'ru-RU';
-  const FIELD_NAMES = {
-    'Контракт_N_договора': 'Контракт / № договора',
-    'Название': 'Название',
-    'Год_и_месяц': 'Год и месяц',
+
+  var ROOT = 'https://infonzfondru-code.github.io/nzf-map/';
+  var host = document.getElementById('nzf-yandex-widget');
+  if (!host || host.dataset.nzfStarted === '1') return;
+  host.dataset.nzfStarted = '1';
+
+  host.innerHTML = `
+    <div class="nzf-app">
+      <div class="nzf-header">
+        <div>
+          <h1>Карта выполненных работ</h1>
+        </div>
+        <div class="nzf-total"><strong id="nzf-total">—</strong><span>объектов в архиве</span></div>
+      </div>
+      <div class="nzf-content">
+        <aside class="nzf-sidebar">
+          <div class="nzf-sidebar-top">
+            <h2>Отделы и годы</h2>
+            <div class="nzf-quick-actions"><button id="nzf-all" type="button">Все</button> · <button id="nzf-none" type="button">Скрыть</button></div>
+          </div>
+          <div id="nzf-depts" class="nzf-departments">Загрузка…</div>
+          <div id="nzf-status" class="nzf-status" aria-live="polite"></div>
+        </aside>
+        <section class="nzf-map-frame" style="height:100%;min-height:540px">
+          <div id="nzf-yandex-map" style="width:100%;height:100%;min-height:540px"></div>
+          <div class="nzf-map-info"><span id="nzf-count">0</span> на карте</div>
+          <button id="nzf-fit" class="nzf-map-home" type="button" title="Показать выбранные объекты">⌂</button>
+          <div id="nzf-hit-menu" class="nzf-hit-menu" hidden></div>
+        </section>
+      </div>
+    </div>`;
+
+  function $(id) { return host.querySelector('#' + id); }
+  function text(value) { return String(value == null ? '' : value); }
+  function norm(value) { return text(value).toLocaleLowerCase('ru').replace(/ё/g, 'е'); }
+  function safe(value) {
+    return text(value).replace(/[&<>"']/g, function (c) {
+      return {'&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;'}[c];
+    });
+  }
+  function status(message) {
+    var node = $('nzf-status');
+    if (node) node.textContent = message || '';
+  }
+
+  var pretty = {
     'Вид_работ': 'Вид работ',
+    'Год_и_месяц': 'Год и месяц',
+    'Контракт_N_договора': 'Контракт / № договора',
     'Площадь_га': 'Площадь, га',
     'Детализация_см_пикс': 'Детализация, см/пикс',
     'Масштаб': 'Масштаб'
   };
-  const ORDER = ['Вид_работ', 'Год_и_месяц', 'Контракт_N_договора', 'Площадь_га', 'Детализация_см_пикс', 'Масштаб', 'Название'];
-  if (!window.L) {
-    departmentList.textContent = 'Не удалось загрузить библиотеку карты. Проверьте доступ к unpkg.com.';
-    statusText.textContent = 'Картографическая библиотека недоступна';
-    return;
-  }
 
-  const map = L.map('map', {
-    center: [61, 90], zoom: 3, minZoom: 2, maxZoom: 18, zoomControl: false,
-    preferCanvas: true, worldCopyJump: true, zoomSnap: .5, zoomDelta: 1
-  });
-  L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
-    maxZoom: 19,
-    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer">OpenStreetMap</a> contributors'
-  }).addTo(map);
-  L.control.zoom({position: 'topright'}).addTo(map);
-  L.control.scale({position: 'bottomleft', imperial: false, metric: true}).addTo(map);
-  const canvasRenderer = L.canvas({padding: .25});
+  var state = {
+    specs: [],
+    selected: new Set(),
+    layers: new Map(),
+    pending: new Map(),
+    entries: new Map(),
+    visible: new Set(),
+    map: null,
+    manifestReady: false,
+    hitMenuOpen: false,
+    ignoreMapClickUntil: 0,
+    lastPointer: null
+  };
 
-  let departments = [];
-  let specs = [];
-  const selected = new Set();
-  const cached = new Map();
-  const pending = new Map();
-  const records = new Map();
-  const failed = new Set();
-  const expanded = new Set();
-
-  function normalize(s) { return String(s ?? '').toLocaleLowerCase(LOCALE).replaceAll('ё', 'е').trim(); }
-  function countSelected() { return specs.reduce((n, s) => n + (selected.has(s.key) && cached.has(s.key) ? s.count : 0), 0); }
-  function setStatus(message) { statusText.textContent = message; }
-  function updateCounts() {
-    byId('visibleCount').textContent = countSelected().toLocaleString(LOCALE);
-    searchEl.disabled = !cached.size;
-  }
-  function updateStatus() {
-    if (pending.size) setStatus(`Загружаем наборы данных: ${pending.size}…`);
-    else if (failed.size) setStatus('Часть данных не загрузилась. Проверьте файлы или соединение.');
-    else setStatus('Данные загружены · нажмите на объект');
-  }
-  function makeRow(label, value) {
-    const row = document.createElement('div');
-    row.className = 'nzf-popup-line';
-    const key = document.createElement('dt');
-    key.textContent = label;
-    const val = document.createElement('dd');
-    // Always show original semantics as plain text, never as untrusted HTML.
-    val.textContent = String(value);
-    row.append(key, val);
-    return row;
-  }
-  function popupNode(feature, spec) {
-    const p = feature.properties || {};
-    const fields = p.fields || {};
-    const card = document.createElement('div');
-    card.className = 'nzf-popup';
-    const pill = document.createElement('span');
-    pill.className = 'nzf-popup-year';
-    pill.textContent = `${spec.departmentTitle} · ${spec.year} год`;
-    const title = document.createElement('h3');
-    title.className = 'nzf-popup-title';
-    title.textContent = p.name || fields['Название'] || 'Объект без названия';
-    card.append(pill, title);
-    const dl = document.createElement('dl');
-    dl.className = 'nzf-popup-list';
-    const keys = [...ORDER, ...Object.keys(fields).filter(k => !ORDER.includes(k))];
-    for (const key of keys) {
-      const val = fields[key];
-      if (val === undefined || val === null || String(val).trim() === '') continue;
-      if (key === 'Название' && normalize(val) === normalize(p.name)) continue;
-      dl.appendChild(makeRow(FIELD_NAMES[key] || key.replaceAll('_', ' '), val));
-    }
-    if (!dl.children.length) dl.appendChild(makeRow('Информация', 'Дополнительные сведения отсутствуют'));
-    card.appendChild(dl);
-    return card;
-  }
-  function lineStyle(spec) { return {color: spec.color, weight: 3.2, opacity: .95, renderer: canvasRenderer}; }
-  function featureStyle(spec) {
-    return {color: spec.color, weight: 1.7, opacity: .9, fillColor: spec.color,
-      fillOpacity: .27, smoothFactor: 1.35, renderer: canvasRenderer};
-  }
-
-  async function loadDataset(spec) {
-    if (cached.has(spec.key)) return cached.get(spec.key);
-    if (pending.has(spec.key)) return pending.get(spec.key);
-    const task = (async () => {
-      const res = await fetch(dataUrl(spec.file), {cache: 'default'});
-      if (!res.ok) throw new Error(`${spec.file}: HTTP ${res.status}`);
-      const geo = await res.json();
-      const reg = [];
-      const layer = L.geoJSON(geo, {
-        renderer: canvasRenderer,
-        style: feature => feature.geometry && /LineString/.test(feature.geometry.type) ? lineStyle(spec) : featureStyle(spec),
-        onEachFeature(feature, shape) {
-          reg.push({feature, layer: shape, spec});
-          shape.on('mouseover', () => { if (shape.setStyle) shape.setStyle({weight: 3, fillOpacity: .42}); });
-          shape.on('mouseout', () => { if (shape.setStyle) layer.resetStyle(shape); });
-          shape.on('click', () => {
-            shape.bindPopup(popupNode(feature, spec), {maxWidth: 380, minWidth: 230, autoPan: true}).openPopup();
-          });
-        }
-      });
-      cached.set(spec.key, layer);
-      records.set(spec.key, reg);
-      failed.delete(spec.key);
-      if (selected.has(spec.key)) layer.addTo(map);
-      updateCounts();
-      return layer;
-    })();
-    pending.set(spec.key, task);
-    updateStatus();
-    try { return await task; }
-    catch (e) {
-      console.error('Не удалось загрузить ' + spec.file, e);
-      failed.add(spec.key);
-      return null;
-    } finally {
-      pending.delete(spec.key);
-      updateStatus();
-      updateCounts();
-    }
-  }
-
-  function fitSelected() {
-    let bounds = null;
-    for (const spec of specs) {
-      if (!selected.has(spec.key)) continue;
-      for (const item of (records.get(spec.key) || [])) {
-        const b = typeof item.layer.getBounds === 'function' ? item.layer.getBounds() : null;
-        if (!b || !b.isValid()) continue;
-        // Retain, but exclude from initial fit, features with suspicious coordinates.
-        const c = b.getCenter();
-        if (c.lat < 35 || c.lat > 78 || c.lng < 20 || c.lng > 180) continue;
-        bounds = bounds ? bounds.extend(b) : L.latLngBounds(b);
-      }
-    }
-    if (bounds && bounds.isValid()) map.fitBounds(bounds, {padding: [38, 38], maxZoom: 12, animate: false});
-    else map.setView([61, 90], 3);
-  }
-  async function changeDataset(spec, enabled) {
-    if (enabled) selected.add(spec.key);
-    else selected.delete(spec.key);
-    const layer = cached.get(spec.key);
-    if (layer) {
-      if (enabled && !map.hasLayer(layer)) layer.addTo(map);
-      else if (!enabled && map.hasLayer(layer)) map.removeLayer(layer);
-    } else if (enabled) await loadDataset(spec);
-    updateCounts();
-    searchResults();
-  }
-  function makeYearRow(spec) {
-    const label = document.createElement('label');
-    label.className = 'nzf-year';
-    const left = document.createElement('span');
-    left.className = 'nzf-year-left';
-    const check = document.createElement('input');
-    check.type = 'checkbox';
-    check.checked = selected.has(spec.key);
-    check.dataset.key = spec.key;
-    check.setAttribute('aria-label', `${spec.departmentTitle}, ${spec.year} год, ${spec.count} объектов`);
-    check.addEventListener('change', () => changeDataset(spec, check.checked));
-    const dot = document.createElement('span');
-    dot.className = 'nzf-year-dot';
-    dot.style.backgroundColor = spec.color;
-    const name = document.createElement('span');
-    name.className = 'nzf-year-name';
-    name.textContent = `${spec.year} год`;
-    left.append(check, dot, name);
-    const counter = document.createElement('span');
-    counter.className = 'nzf-year-count';
-    counter.textContent = spec.count;
-    label.append(left, counter);
-    return label;
-  }
-  function renderDepartments() {
-    departmentList.replaceChildren();
-    for (const dept of departments) {
-      const section = document.createElement('section');
-      section.className = 'nzf-department';
-      const header = document.createElement('button');
-      header.type = 'button';
-      header.className = 'nzf-department-head';
-      const isOpen = expanded.has(dept.id);
-      header.setAttribute('aria-expanded', String(isOpen));
-      const title = document.createElement('span');
-      title.className = 'nzf-department-title';
-      title.textContent = dept.title;
-      const amount = document.createElement('span');
-      amount.className = 'nzf-department-count';
-      amount.textContent = dept.years.reduce((n, year) => n + year.count, 0).toLocaleString(LOCALE);
-      const chevron = document.createElement('span');
-      chevron.className = 'nzf-department-chevron';
-      chevron.textContent = isOpen ? '⌄' : '›';
-      header.append(title, amount, chevron);
-      const body = document.createElement('div');
-      body.className = 'nzf-department-body';
-      body.hidden = !isOpen;
-      header.addEventListener('click', () => {
-        const open = body.hidden;
-        body.hidden = !open;
-        header.setAttribute('aria-expanded', String(open));
-        chevron.textContent = open ? '⌄' : '›';
-        if (open) expanded.add(dept.id);
-        else expanded.delete(dept.id);
-      });
-      const actions = document.createElement('div');
-      actions.className = 'nzf-department-actions';
-      for (const [label, state] of [['Все годы', true], ['Скрыть', false]]) {
-        const button = document.createElement('button');
-        button.type = 'button';
-        button.textContent = label;
-        button.addEventListener('click', () => setAll(state, dept.id));
-        actions.appendChild(button);
-      }
-      const yearRows = document.createElement('div');
-      yearRows.className = 'nzf-years';
-      for (const spec of specs.filter(s => s.departmentId === dept.id).slice().reverse()) {
-        yearRows.appendChild(makeYearRow(spec));
-      }
-      body.append(actions, yearRows);
-      section.append(header, body);
-      departmentList.appendChild(section);
-    }
-  }
-
-  async function setAll(enabled, departmentId = null) {
-    const subset = specs.filter(s => !departmentId || s.departmentId === departmentId);
-    for (const spec of subset) {
-      if (enabled) selected.add(spec.key);
-      else selected.delete(spec.key);
-      const layer = cached.get(spec.key);
-      if (layer) {
-        if (enabled && !map.hasLayer(layer)) layer.addTo(map);
-        else if (!enabled && map.hasLayer(layer)) map.removeLayer(layer);
-      }
-    }
-    departmentList.querySelectorAll('input[data-key]').forEach(input => {
-      if (subset.some(s => s.key === input.dataset.key)) input.checked = enabled;
+  function balloon(f, spec) {
+    var p = f.properties || {};
+    var fields = p.fields || {};
+    var name = p.name || fields['Название'] || 'Объект';
+    var result = '<div style="font-family:inherit;font-size:13px;line-height:1.55;color:#30352e;max-width:360px">' +
+      '<div style="font-size:17px;font-weight:600;line-height:1.3;margin-bottom:8px">' + safe(name) + '</div>' +
+      '<div style="color:#70816b;margin:0 0 10px">' + safe(spec.department) + ' · ' + spec.year + '</div>' +
+      '<table style="border-collapse:collapse">';
+    Object.keys(fields).forEach(function (key) {
+      var value = fields[key];
+      if (value == null || !text(value).trim()) return;
+      if (key === 'Название' && norm(value) === norm(name)) return;
+      result += '<tr><td style="vertical-align:top;color:#72776f;padding:4px 12px 4px 0">' +
+        safe(pretty[key] || key.replace(/_/g, ' ')) + '</td><td style="padding:4px 0">' + safe(value) + '</td></tr>';
     });
-    if (enabled) await Promise.all(subset.filter(s => !cached.has(s.key)).map(loadDataset));
-    updateCounts();
-    searchResults();
-    if (enabled) fitSelected();
+    return result + '</table></div>';
   }
-  function focusFeature(item) {
-    const layer = item.layer;
-    if (typeof layer.getBounds === 'function') {
-      const b = layer.getBounds();
-      if (b.isValid()) map.fitBounds(b, {padding: [50, 50], maxZoom: 12});
-    } else if (typeof layer.getLatLng === 'function') map.setView(layer.getLatLng(), 12);
-    layer.bindPopup(popupNode(item.feature, item.spec), {maxWidth: 380, minWidth: 230}).openPopup();
-    if (window.innerWidth < 681) byId('map').scrollIntoView({behavior: 'smooth', block: 'center'});
-  }
-  function searchResults() {
-    resultsEl.replaceChildren();
-    const q = normalize(searchEl.value);
-    if (!q) return;
-    const matches = [];
-    for (const spec of specs) {
-      if (!selected.has(spec.key)) continue;
-      for (const item of (records.get(spec.key) || [])) {
-        const p = item.feature.properties || {};
-        if (normalize([p.name, ...Object.values(p.fields || {})].join(' ')).includes(q)) matches.push(item);
-        if (matches.length >= 12) break;
-      }
-      if (matches.length >= 12) break;
-    }
-    if (!matches.length) {
-      const empty = document.createElement('span');
-      empty.className = 'nzf-no-result';
-      empty.textContent = 'По выбранным отделам и годам ничего не найдено';
-      resultsEl.appendChild(empty);
-    }
-    for (const item of matches) {
-      const btn = document.createElement('button');
-      btn.type = 'button';
-      btn.className = 'nzf-result';
-      const title = document.createElement('strong');
-      title.textContent = item.feature.properties?.name || 'Без названия';
-      const small = document.createElement('small');
-      small.textContent = `${item.spec.departmentTitle} · ${item.spec.year} · ${item.feature.properties?.fields?.['Вид_работ'] || 'Объект'}`;
-      btn.append(title, small);
-      btn.addEventListener('click', () => focusFeature(item));
-      resultsEl.appendChild(btn);
+
+  function parts(geom) {
+    if (!geom) return [];
+    var c = geom.coordinates;
+    switch (geom.type) {
+      case 'Polygon': return [{ type: 'polygon', coords: c }];
+      case 'MultiPolygon': return c.map(function (x) { return { type: 'polygon', coords: x }; });
+      case 'LineString': return [{ type: 'line', coords: c }];
+      case 'MultiLineString': return c.map(function (x) { return { type: 'line', coords: x }; });
+      case 'Point': return [{ type: 'point', coords: c }];
+      case 'MultiPoint': return c.map(function (x) { return { type: 'point', coords: x }; });
+      case 'GeometryCollection': return (geom.geometries || []).reduce(function (a, g) { return a.concat(parts(g)); }, []);
+      default: return [];
     }
   }
-  async function init() {
+
+  function latlon(p) { return [p[1], p[0]]; }
+
+  function pointInRing(point, ring) {
+    var x = point[0], y = point[1], inside = false;
+    for (var i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+      var xi = ring[i][0], yi = ring[i][1];
+      var xj = ring[j][0], yj = ring[j][1];
+      var intersect = ((yi > y) !== (yj > y)) &&
+        (x < ((xj - xi) * (y - yi)) / ((yj - yi) || 1e-12) + xi);
+      if (intersect) inside = !inside;
+    }
+    return inside;
+  }
+
+  function pointInPolygon(point, rings) {
+    if (!rings || !rings.length || !pointInRing(point, rings[0])) return false;
+    for (var i = 1; i < rings.length; i++) {
+      if (pointInRing(point, rings[i])) return false;
+    }
+    return true;
+  }
+
+  function pointToSegmentDistance(point, a, b) {
+    var x = point[0], y = point[1], x1 = a[0], y1 = a[1], x2 = b[0], y2 = b[1];
+    var dx = x2 - x1, dy = y2 - y1;
+    if (!dx && !dy) return Math.hypot(x - x1, y - y1);
+    var t = ((x - x1) * dx + (y - y1) * dy) / (dx * dx + dy * dy);
+    t = Math.max(0, Math.min(1, t));
+    var px = x1 + t * dx, py = y1 + t * dy;
+    return Math.hypot(x - px, y - py);
+  }
+
+  function lineHit(point, coords, tolerance) {
+    for (var i = 0; i < coords.length - 1; i++) {
+      if (pointToSegmentDistance(point, coords[i], coords[i + 1]) <= tolerance) return true;
+    }
+    return false;
+  }
+
+  function pointHit(point, coords, tolerance) {
+    return Math.hypot(point[0] - coords[0], point[1] - coords[1]) <= tolerance;
+  }
+
+  function getToleranceDegrees() {
+    if (!state.map) return 0.03;
+    var zoom = state.map.getZoom ? state.map.getZoom() : 4;
+    return Math.max(0.00015, 0.12 / Math.pow(2, Math.max(1, zoom - 3)));
+  }
+
+  function featureHit(feature, lonLat) {
+    var tolerance = getToleranceDegrees();
+    return parts(feature.geometry).some(function (g) {
+      if (g.type === 'polygon') return pointInPolygon(lonLat, g.coords);
+      if (g.type === 'line') return lineHit(lonLat, g.coords, tolerance);
+      return pointHit(lonLat, g.coords, tolerance);
+    });
+  }
+
+  function openEntry(entry, zoomToObject) {
+    if (!entry || !entry.objects || !entry.objects.length) return;
+    var obj = entry.objects[0];
+    hideHitMenu();
+    if (zoomToObject !== false && state.map && obj.geometry && obj.geometry.getBounds) {
+      var bounds = obj.geometry.getBounds();
+      if (bounds) state.map.setBounds(bounds, { checkZoomRange: true, zoomMargin: 65 });
+    }
+    if (obj.balloon) obj.balloon.open();
+  }
+
+  function hideHitMenu() {
+    var menu = $('nzf-hit-menu');
+    if (!menu) return;
+    menu.hidden = true;
+    menu.innerHTML = '';
+    state.hitMenuOpen = false;
+  }
+
+  function showHitMenu(entries, localPixels) {
+    var menu = $('nzf-hit-menu');
+    if (!menu) return;
+    menu.innerHTML = '';
+
+    var title = document.createElement('div');
+    title.className = 'nzf-hit-menu-title';
+    title.textContent = 'Выберите объект';
+    menu.appendChild(title);
+
+    entries.forEach(function (entry) {
+      var p = entry.feature.properties || {};
+      var fields = p.fields || {};
+      var button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'nzf-hit-item';
+
+      var strong = document.createElement('strong');
+      strong.textContent = p.name || fields['Название'] || 'Объект';
+      var small = document.createElement('small');
+      var attrs = (entry.feature.properties || {}).fields || {};
+      var details = [attrs['Вид_работ'], entry.spec.year + ' год', attrs['Площадь_га'] ? attrs['Площадь_га'] + ' га' : ''];
+      small.textContent = details.filter(Boolean).join(' · ');
+
+      button.append(strong, small);
+      button.addEventListener('click', function () { openEntry(entry, false); });
+      menu.appendChild(button);
+    });
+
+
+
+    var x = 28, y = 28;
+    if (localPixels && localPixels.length >= 2) {
+      x = localPixels[0] + 14;
+      y = localPixels[1] + 10;
+    }
+    var parent = host.querySelector('.nzf-map-frame');
+    if (parent) {
+      x = Math.max(10, Math.min(x, parent.clientWidth - 28));
+      y = Math.max(10, Math.min(y, parent.clientHeight - 28));
+    }
+
+    menu.style.left = x + 'px';
+    menu.style.top = y + 'px';
+    menu.hidden = false;
+    state.hitMenuOpen = true;
+
+    requestAnimationFrame(function () {
+      var frame = host.querySelector('.nzf-map-frame');
+      if (!frame) return;
+      var frameRect = frame.getBoundingClientRect();
+      var menuRect = menu.getBoundingClientRect();
+      var left = x;
+      var top = y;
+      if (menuRect.right > frameRect.right - 10) left = Math.max(10, x - menuRect.width - 24);
+      if (menuRect.bottom > frameRect.bottom - 10) top = Math.max(10, y - menuRect.height - 24);
+      menu.style.left = left + 'px';
+      menu.style.top = top + 'px';
+    });
+  }
+
+  function recordPointer(e) {
+    var frame = host.querySelector('.nzf-map-frame');
+    if (!frame) return;
+    var rect = frame.getBoundingClientRect();
+    state.lastPointer = {
+      local: [e.clientX - rect.left, e.clientY - rect.top],
+      page: [e.pageX, e.pageY],
+      when: Date.now()
+    };
+  }
+
+  function coordsFromPointer() {
+    var p = state.lastPointer;
+    if (!p || Date.now() - p.when > 4000 || !state.map) return null;
     try {
-      const response = await fetch(dataUrl('manifest.json'), {cache: 'default'});
-      if (!response.ok) throw new Error(`manifest.json: HTTP ${response.status}`);
-      const config = await response.json();
-      departments = (config.departments || []).filter(dept => dept.id && Array.isArray(dept.years) && dept.years.length);
-      specs = departments.flatMap(dept => dept.years.map(y => ({
-        ...y, departmentId: dept.id, departmentTitle: dept.title,
-        key: `${dept.id}:${y.year}`
-      }))).sort((a, b) => a.year - b.year);
-      if (!specs.length) throw new Error('В manifest.json нет отделов и годов');
-      for (const spec of specs) selected.add(spec.key);
-      expanded.add(departments[0].id);
-      byId('totalCount').textContent = specs.reduce((a, s) => a + s.count, 0).toLocaleString(LOCALE);
-      renderDepartments();
-      searchEl.addEventListener('input', searchResults);
-      byId('selectAll').addEventListener('click', () => setAll(true));
-      byId('selectNone').addEventListener('click', () => setAll(false));
-      byId('fitAll').addEventListener('click', fitSelected);
-      await Promise.all(specs.map(loadDataset));
-      fitSelected();
-      updateStatus();
-    } catch (e) {
-      console.error('Ошибка загрузки карты', e);
-      setStatus('Ошибка загрузки карты. Откройте страницу через HTTP(S), а не как файл.');
-      departmentList.textContent = 'Не удалось прочитать список данных. Проверьте manifest.json.';
+      var projection = state.map.options.get('projection');
+      var globalPixels = state.map.converter.pageToGlobal(p.page);
+      return projection.fromGlobalPixels(globalPixels, state.map.getZoom());
+    } catch (err) {
+      return null;
     }
   }
-  init();
+
+  function eventCoordinates(e) {
+    var coords = e && e.get && e.get('coords');
+    if (Array.isArray(coords) && coords.length >= 2 &&
+        Number.isFinite(coords[0]) && Number.isFinite(coords[1])) return coords;
+    return coordsFromPointer();
+  }
+
+  function eventLocalPixels(e, coords) {
+    var p = state.lastPointer;
+    if (p && Date.now() - p.when < 4000) return p.local;
+    try {
+      if (coords && state.map && state.map.converter && typeof state.map.converter.globalToPage === 'function') {
+        var projection = state.map.options.get('projection');
+        var gp = projection.toGlobalPixels(coords, state.map.getZoom());
+        var pp = state.map.converter.globalToPage(gp);
+        var r = host.querySelector('.nzf-map-frame').getBoundingClientRect();
+        return [pp[0] - window.scrollX - r.left, pp[1] - window.scrollY - r.top];
+      }
+    } catch (err) {}
+    return [24, 24];
+  }
+
+  function visibleEntries() {
+    var result = [];
+    state.selected.forEach(function (key) {
+      var list = state.entries.get(key) || [];
+      for (var i = 0; i < list.length; i++) result.push(list[i]);
+    });
+    return result;
+  }
+
+  function handleCoordinateClick(coords, localPixels) {
+    if (!coords || !coords.length) return;
+    var lonLat = [coords[1], coords[0]];
+    var hits = [];
+    visibleEntries().forEach(function (entry) {
+      try {
+        if (featureHit(entry.feature, lonLat)) hits.push(entry);
+      } catch (err) {
+        console.warn('НЗФ: ошибка проверки попадания', err);
+      }
+    });
+    if (!hits.length) {
+      hideHitMenu();
+      return;
+    }
+    if (hits.length === 1) {
+      openEntry(hits[0], false);
+      return;
+    }
+    hits.sort(function (a, b) {
+      var an = ((a.feature.properties || {}).name || '').toLowerCase();
+      var bn = ((b.feature.properties || {}).name || '').toLowerCase();
+      return an.localeCompare(bn, 'ru');
+    });
+    showHitMenu(hits, localPixels);
+  }
+
+  function makeObjects(feature, spec, entry) {
+    var result = [];
+    var props = {
+      balloonContent: balloon(feature, spec),
+      hintContent: null
+    };
+    // Colors are assigned per year in manifest.json. Keep the same color for polygons, lines and points.
+    var yearColor = /^#[0-9a-fA-F]{6}$/.test(spec.color || '') ? spec.color : '#419746';
+    var opt = {
+      strokeColor: yearColor,
+      strokeWidth: 2,
+      strokeOpacity: 0.94,
+      fillColor: yearColor,
+      fillOpacity: 0.21,
+      openBalloonOnClick: false,
+      openHintOnHover: false
+    };
+
+    parts(feature.geometry).forEach(function (g) {
+      try {
+        var obj;
+        if (g.type === 'polygon') obj = new ymaps.Polygon(g.coords.map(function (r) { return r.map(latlon); }), props, opt);
+        else if (g.type === 'line') obj = new ymaps.Polyline(g.coords.map(latlon), props, opt);
+        else obj = new ymaps.Placemark(latlon(g.coords), props, { preset: 'islands#circleIcon', iconColor: yearColor, openBalloonOnClick: false, openHintOnHover: false });
+
+        obj.events.add('click', function (e) {
+          state.ignoreMapClickUntil = Date.now() + 250;
+          if (e.preventDefault) e.preventDefault();
+          var point = eventCoordinates(e);
+          handleCoordinateClick(point, eventLocalPixels(e, point));
+        });
+
+        result.push(obj);
+      } catch (err) {
+        console.warn('НЗФ: пропущена геометрия', err);
+      }
+    });
+
+    entry.objects = result;
+    return result;
+  }
+
+  async function getJSON(path) {
+    var response = await fetch(ROOT + path);
+    if (!response.ok) throw new Error(path + ': HTTP ' + response.status);
+    return response.json();
+  }
+
+  function updateCount() {
+    var n = 0;
+    state.selected.forEach(function (key) { n += (state.entries.get(key) || []).length; });
+    $('nzf-count').textContent = n.toLocaleString('ru-RU');
+  }
+
+  function showCollection(spec, layer) {
+    if (!state.map) return;
+    if (state.selected.has(spec.key) && !state.visible.has(spec.key)) {
+      state.map.geoObjects.add(layer);
+      state.visible.add(spec.key);
+    } else if (!state.selected.has(spec.key) && state.visible.has(spec.key)) {
+      state.map.geoObjects.remove(layer);
+      state.visible.delete(spec.key);
+    }
+  }
+
+  async function getLayer(spec) {
+    if (state.layers.has(spec.key)) return state.layers.get(spec.key);
+    if (state.pending.has(spec.key)) return state.pending.get(spec.key);
+
+    var task = (async function () {
+      var fc = await getJSON(spec.file);
+      var group = new ymaps.GeoObjectCollection();
+      var entries = [];
+
+      for (var i = 0; i < (fc.features || []).length; i++) {
+        var f = fc.features[i];
+        var entry = { feature: f, objects: [], spec: spec };
+        var objects = makeObjects(f, spec, entry);
+        objects.forEach(function (obj) { group.add(obj); });
+        if (objects.length) entries.push(entry);
+      }
+
+      state.layers.set(spec.key, group);
+      state.entries.set(spec.key, entries);
+      return group;
+    })();
+
+    state.pending.set(spec.key, task);
+    try { return await task; }
+    finally { state.pending.delete(spec.key); }
+  }
+
+  async function toggle(spec, on, noFit) {
+    if (on) state.selected.add(spec.key);
+    else state.selected.delete(spec.key);
+
+    var layer = state.layers.get(spec.key);
+    if (!on) {
+      if (layer) showCollection(spec, layer);
+      updateCount();
+      hideHitMenu();
+      return;
+    }
+
+    if (!state.map) {
+      status('Ожидаем подключения Яндекс Карт…');
+      return;
+    }
+
+    try {
+      status('Загрузка объектов за ' + spec.year + ' год…');
+      layer = layer || await getLayer(spec);
+      showCollection(spec, layer);
+      updateCount();
+      status('');
+      if (!noFit && state.selected.size === 1) fit();
+    } catch (err) {
+      state.selected.delete(spec.key);
+      var c = host.querySelector('input[data-key="' + spec.key + '"]');
+      if (c) c.checked = false;
+      status('Ошибка загрузки ' + spec.year + ': ' + err.message);
+      console.error('НЗФ:', err);
+    }
+  }
+
+  function fit() {
+    if (!state.map) return;
+    var loLat = 90, loLon = 180, hiLat = -90, hiLon = -180;
+    function include(p) {
+      if (!Array.isArray(p) || !Number.isFinite(p[0]) || !Number.isFinite(p[1])) return;
+      var lon = p[0], lat = p[1];
+      if (lat < 35 || lat > 79 || lon < 19 || lon > 180) return;
+      loLat = Math.min(loLat, lat); hiLat = Math.max(hiLat, lat);
+      loLon = Math.min(loLon, lon); hiLon = Math.max(hiLon, lon);
+    }
+    function scan(node) {
+      if (!Array.isArray(node)) return;
+      if (node.length >= 2 && typeof node[0] === 'number' && typeof node[1] === 'number') { include(node); return; }
+      node.forEach(scan);
+    }
+    state.selected.forEach(function (key) {
+      (state.entries.get(key) || []).forEach(function (r) {
+        parts(r.feature.geometry).forEach(function (p) { scan(p.coords); });
+      });
+    });
+    if (loLat <= hiLat) state.map.setBounds([[loLat, loLon], [hiLat, hiLon]], { checkZoomRange: true, zoomMargin: 35 });
+    else state.map.setCenter([61, 90], 3);
+  }
+
+  function buildMenu(manifest) {
+    var list = $('nzf-depts');
+    list.replaceChildren();
+
+    (manifest.departments || []).forEach(function (dept) {
+      var section = document.createElement('section');
+      section.className = 'nzf-department';
+
+      var heading = document.createElement('button');
+      heading.type = 'button';
+      heading.className = 'nzf-department-head';
+      heading.textContent = dept.title;
+      heading.setAttribute('aria-expanded', 'true');
+
+      var body = document.createElement('div');
+      body.className = 'nzf-department-body';
+
+      var years = document.createElement('div');
+      years.className = 'nzf-years';
+
+      (dept.years || []).slice().reverse().forEach(function (year) {
+        var spec = Object.assign({}, year, { key: dept.id + ':' + year.year, department: dept.title });
+        state.specs.push(spec);
+
+        var label = document.createElement('label');
+        label.className = 'nzf-year';
+
+        var left = document.createElement('span');
+        left.className = 'nzf-year-left';
+
+        var cb = document.createElement('input');
+        cb.type = 'checkbox';
+        cb.dataset.key = spec.key;
+        cb.addEventListener('change', function () { toggle(spec, cb.checked); });
+
+        var swatch = document.createElement('span');
+        swatch.className = 'nzf-year-color';
+        swatch.style.backgroundColor = /^#[0-9a-fA-F]{6}$/.test(spec.color || '') ? spec.color : '#419746';
+        swatch.setAttribute('aria-hidden', 'true');
+
+        var name = document.createElement('span');
+        name.className = 'nzf-year-name';
+        name.textContent = year.year + ' год';
+
+        var count = document.createElement('span');
+        count.className = 'nzf-year-count';
+        count.textContent = year.count || 0;
+
+        left.append(cb, swatch, name);
+        label.append(left, count);
+        years.append(label);
+      });
+
+      body.append(years);
+      section.append(heading, body);
+      heading.addEventListener('click', function () {
+        body.hidden = !body.hidden;
+        heading.setAttribute('aria-expanded', body.hidden ? 'false' : 'true');
+      });
+      list.append(section);
+    });
+
+    $('nzf-total').textContent = state.specs.reduce(function (n, s) { return n + (s.count || 0); }, 0).toLocaleString('ru-RU');
+    $('nzf-fit').addEventListener('click', fit);
+
+    $('nzf-none').addEventListener('click', function () {
+      hideHitMenu();
+      host.querySelectorAll('.nzf-year input').forEach(function (input) { input.checked = false; });
+      state.specs.forEach(function (spec) { toggle(spec, false, true); });
+      status('');
+    });
+
+    $('nzf-all').addEventListener('click', async function () {
+      hideHitMenu();
+      host.querySelectorAll('.nzf-year input').forEach(function (input) { input.checked = true; });
+      await Promise.all(state.specs.map(function (spec) { return toggle(spec, true, true); }));
+      fit();
+    });
+
+    state.manifestReady = true;
+  }
+
+  async function initialize() {
+    try {
+      var manifest = await getJSON('manifest.json');
+      buildMenu(manifest);
+      status('');
+    } catch (err) {
+      status('Не удалось загрузить данные: ' + err.message);
+      console.error('НЗФ: ошибка manifest.json', err);
+      return;
+    }
+
+    var attempts = 0;
+    var ticker = setInterval(function () {
+      if (window.ymaps && typeof window.ymaps.ready === 'function') {
+        clearInterval(ticker);
+        window.ymaps.ready(function () {
+          try {
+            state.map = new ymaps.Map(
+              'nzf-yandex-map',
+              { center: [61, 90], zoom: 3, controls: ['zoomControl', 'typeSelector', 'fullscreenControl'] },
+              { suppressMapOpenBlock: true }
+            );
+
+            state.map.options.set('openBalloonOnClick', false);
+            state.map.options.set('openHintOnHover', false);
+            var mapDiv = host.querySelector('#nzf-yandex-map');
+            mapDiv.addEventListener('pointerdown', recordPointer, true);
+            mapDiv.addEventListener('click', recordPointer, true);
+
+            state.map.events.add('click', function (e) {
+              if (Date.now() < state.ignoreMapClickUntil) return;
+              var point = eventCoordinates(e);
+          handleCoordinateClick(point, eventLocalPixels(e, point));
+            });
+            state.map.events.add('actionbegin', hideHitMenu);
+            document.addEventListener('pointerdown', function (e) {
+              if (!host.contains(e.target)) hideHitMenu();
+            });
+            document.addEventListener('keydown', function (e) {
+              if (e.key === 'Escape') hideHitMenu();
+            });
+
+            var recent = state.specs.find(function (s) { return s.department === 'Отдел геодезии' && s.year === 2025; });
+            if (recent) {
+              var checkbox = host.querySelector('input[data-key="' + recent.key + '"]');
+              if (checkbox) checkbox.checked = true;
+              toggle(recent, true);
+            }
+          } catch (err) {
+            status('Ошибка инициализации карты: ' + err.message);
+            console.error('НЗФ: ошибка ymaps.Map', err);
+          }
+        });
+      } else if (++attempts >= 120) {
+        clearInterval(ticker);
+        status('API Яндекс Карт не появился на этой странице.');
+      }
+    }, 250);
+  }
+
+  initialize();
 })();
