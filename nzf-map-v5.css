@@ -1,0 +1,183 @@
+/* NZF brand palette: natural green and neutral graphite. Scoped to the map widget. */
+#nzf-yandex-widget {
+  --nzf-accent: #46942f;
+  --nzf-accent-dark: #367825;
+  --nzf-ink: #292e29;
+  --nzf-muted: #747b72;
+  --nzf-line: #e4e8e2;
+  --nzf-paper: #fff;
+  --nzf-soft: #f7f9f5;
+  color: var(--nzf-ink);
+}
+#nzf-yandex-widget .nzf-app,
+#nzf-yandex-widget .nzf-app * { box-sizing: border-box; }
+#nzf-yandex-widget .nzf-app {
+  width: 100%; max-width: 1450px; margin: 0 auto; padding: 16px 10px 10px;
+  color: var(--nzf-ink); font-family: inherit; font-size: 14px; line-height: 1.5;
+  background: #fff; color-scheme: light;
+}
+#nzf-yandex-widget button,
+#nzf-yandex-widget input { font-family: inherit; }
+#nzf-yandex-widget button { cursor: pointer; }
+#nzf-yandex-widget .nzf-header {
+  display: flex; justify-content: space-between; align-items: center; gap: 16px;
+  padding: 0 0 16px; margin: 0;
+}
+#nzf-yandex-widget .nzf-header h1 {
+  color: #282e29; font-size: clamp(26px, 2.3vw, 33px); font-weight: 600;
+  line-height: 1.25; letter-spacing: -.018em; margin: 0; padding: 0;
+  border: 0; text-transform: none;
+}
+#nzf-yandex-widget .nzf-kicker { display: none; }
+#nzf-yandex-widget .nzf-total {
+  display: flex; flex-direction: column; justify-content: center; text-align: center;
+  background: #fff; border: 1px solid #e1e6de; border-radius: 4px;
+  padding: 8px 16px; min-width: 112px;
+}
+#nzf-yandex-widget .nzf-total strong {
+  font-size: 19px; font-weight: 650; line-height: 1.15; color: var(--nzf-accent-dark);
+}
+#nzf-yandex-widget .nzf-total span {
+  font-size: 10px; font-weight: 400; color: #767d73; white-space: nowrap;
+}
+#nzf-yandex-widget .nzf-content {
+  display: grid; grid-template-columns: 229px minmax(0, 1fr); gap: 14px;
+  height: min(73vh, 650px); min-height: 480px;
+}
+#nzf-yandex-widget .nzf-sidebar {
+  border: 1px solid var(--nzf-line); border-radius: 5px; padding: 16px 13px;
+  background: #fff; display: flex; flex-direction: column; overflow: auto; min-width: 0;
+  box-shadow: none;
+}
+#nzf-yandex-widget .nzf-sidebar-top {
+  display: flex; align-items: center; justify-content: space-between; gap: 9px;
+  margin: 0 0 15px;
+}
+#nzf-yandex-widget .nzf-sidebar h2 {
+  margin: 0; padding: 0; color: #30362e;
+  font-size: 15px; font-weight: 600; line-height: 1.3;
+}
+#nzf-yandex-widget .nzf-quick-actions {
+  display: flex; flex-shrink: 0; align-items: center; gap: 6px;
+  font-size: 11px; color: #b1b5b0;
+}
+#nzf-yandex-widget .nzf-quick-actions button {
+  color: var(--nzf-accent-dark); border: 0; background: transparent;
+  padding: 0; font-weight: 500; font-size: 11px;
+}
+#nzf-yandex-widget .nzf-quick-actions button:hover { text-decoration: underline; }
+#nzf-yandex-widget .nzf-departments { display: flex; flex-direction: column; gap: 9px; }
+#nzf-yandex-widget .nzf-department { margin: 0; }
+#nzf-yandex-widget .nzf-department-head {
+  width: 100%; min-height: 44px; display: flex; justify-content: space-between;
+  align-items: center; gap: 10px; padding: 10px 12px;
+  border: 1px solid #e0e7dc; background: #f6f8f5; border-radius: 4px 4px 0 0;
+  color: #313a30; font-size: 13px; font-weight: 600; line-height: 1.4;
+  text-align: left;
+}
+#nzf-yandex-widget .nzf-department-head:hover { background: #f0f5ed; }
+#nzf-yandex-widget .nzf-department-head::after {
+  content: ''; width: 7px; height: 7px; border-right: 1.8px solid #6b7c69;
+  border-bottom: 1.8px solid #6b7c69; transform: rotate(45deg); flex-shrink: 0;
+  margin: -4px 2px 0 0;
+}
+#nzf-yandex-widget .nzf-department-head[aria-expanded="false"] { border-radius: 4px; }
+#nzf-yandex-widget .nzf-department-head[aria-expanded="false"]::after {
+  transform: rotate(-45deg); margin-top: 0;
+}
+#nzf-yandex-widget .nzf-department-body {
+  background: #fff; border: 1px solid #e0e7dc; border-top: 0;
+  border-radius: 0 0 4px 4px; padding: 9px 8px;
+}
+#nzf-yandex-widget .nzf-department-body[hidden] { display: none !important; }
+#nzf-yandex-widget .nzf-years { display: flex; flex-direction: column; gap: 5px; }
+#nzf-yandex-widget .nzf-year {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  border: 1px solid transparent; border-radius: 4px; background: #fff;
+  padding: 9px 7px; color: #3e433c; cursor: pointer;
+  transition: background .15s, border-color .15s;
+}
+#nzf-yandex-widget .nzf-year:hover { background: #f5f8f3; border-color: #e7ede4; }
+#nzf-yandex-widget .nzf-year:has(input:checked) {
+  background: #eff5eb; border-color: #c6dac0;
+}
+#nzf-yandex-widget .nzf-year-left { display: flex; align-items: center; min-width: 0; gap: 8px; }
+#nzf-yandex-widget .nzf-year input {
+  height: 15px; width: 15px; margin: 0; flex-shrink: 0; accent-color: var(--nzf-accent);
+}
+#nzf-yandex-widget .nzf-year-name {
+  font-size: 12px; font-weight: 500; line-height: 1.3; white-space: nowrap;
+  color: #3f453d;
+}
+#nzf-yandex-widget .nzf-year-count {
+  color: #70796b; background: transparent; border: 0;
+  font-size: 11px; line-height: 1.2; font-weight: 400; min-width: 24px;
+  text-align: right; font-variant-numeric: tabular-nums;
+}
+#nzf-yandex-widget .nzf-status {
+  margin-top: 10px; font-size: 12px; line-height: 1.5; color: #9b6f21;
+  min-height: 0; white-space: normal;
+}
+#nzf-yandex-widget .nzf-status:empty { display: none; }
+#nzf-yandex-widget .nzf-map-frame {
+  position: relative; min-width: 0; height: 100%; border: 1px solid var(--nzf-line);
+  background: #edf2ea; border-radius: 5px; overflow: hidden;
+}
+#nzf-yandex-widget .nzf-map-info {
+  position: absolute; z-index: 10; top: 12px; left: 12px;
+  background: rgba(255,255,255,.96); border: 1px solid #e7ebe5;
+  border-radius: 4px; padding: 8px 11px; color: #555f50;
+  box-shadow: 0 1px 4px rgba(31,42,24,.10);
+  font-size: 12px; line-height: 1.3; pointer-events: none;
+}
+#nzf-yandex-widget .nzf-map-info span { font-weight: 600; color: #357b2e; }
+#nzf-yandex-widget .nzf-map-home {
+  position: absolute; z-index: 10; top: 75px; right: 12px;
+  height: 34px; width: 34px; border: 1px solid #e0e5dc;
+  border-radius: 4px; background: #fff; color: #53694c;
+  box-shadow: 0 1px 4px rgba(31,42,24,.10); font-size: 17px;
+}
+#nzf-yandex-widget .nzf-map-home:hover { color: var(--nzf-accent-dark); }
+#nzf-yandex-widget .nzf-hit-menu {
+  position: absolute; z-index: 99999; width: 294px; max-width: calc(100% - 20px);
+  max-height: min(360px, calc(100% - 22px)); overflow-y: auto;
+  padding: 8px; background: rgba(255,255,255,.99);
+  border: 1px solid #d9e1d6; border-top: 3px solid #48953a;
+  border-radius: 5px; box-shadow: 0 10px 28px rgba(37,56,30,.19);
+}
+#nzf-yandex-widget .nzf-hit-menu[hidden] { display: none !important; }
+#nzf-yandex-widget .nzf-hit-menu-title {
+  padding: 6px 6px 10px; margin: 0 0 4px; color: #394638;
+  font-weight: 600; font-size: 13px; border-bottom: 1px solid #edf0eb;
+}
+#nzf-yandex-widget .nzf-hit-item {
+  display: flex; flex-direction: column; gap: 2px; text-align: left;
+  width: 100%; padding: 9px 8px; border: 0; border-bottom: 1px solid #ebefea;
+  border-radius: 0; background: #fff; color: #30382e;
+}
+#nzf-yandex-widget .nzf-hit-item:hover,
+#nzf-yandex-widget .nzf-hit-item:focus-visible {
+  background: #f0f6ec; outline: 0;
+}
+#nzf-yandex-widget .nzf-hit-item strong {
+  color: #2a3328; font-weight: 600; font-size: 12px; line-height: 1.4;
+  white-space: normal; overflow-wrap: anywhere;
+}
+#nzf-yandex-widget .nzf-hit-item small { color: #75826e; font-size: 11px; }
+#nzf-yandex-widget .nzf-hit-menu-more { padding: 6px; font-size: 11px; color: #717a6c; }
+@media (max-width: 760px) {
+  #nzf-yandex-widget .nzf-app { padding: 10px 4px; }
+  #nzf-yandex-widget .nzf-header { gap: 9px; }
+  #nzf-yandex-widget .nzf-header h1 { font-size: 22px; }
+  #nzf-yandex-widget .nzf-total { min-width: 80px; padding: 6px 8px; }
+  #nzf-yandex-widget .nzf-total strong { font-size: 16px; }
+  #nzf-yandex-widget .nzf-total span { max-width: 70px; white-space: normal; }
+  #nzf-yandex-widget .nzf-content { grid-template-columns: 1fr; height: auto; gap: 10px; }
+  #nzf-yandex-widget .nzf-sidebar { padding: 12px 10px; }
+  #nzf-yandex-widget .nzf-years { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  #nzf-yandex-widget .nzf-year { padding: 9px 7px; }
+  #nzf-yandex-widget .nzf-map-frame { height: 520px !important; }
+}
+@media (prefers-reduced-motion: reduce) {
+  #nzf-yandex-widget .nzf-app * { transition: none !important; }
+}
