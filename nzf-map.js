@@ -2,8 +2,8 @@
 (() => {
   'use strict';
   const byId = id => document.getElementById(id);
-  const scriptBase = document.currentScript?.src ? new URL('../', document.currentScript.src) : new URL('./', document.baseURI);
-  const dataBase = new URL('data/', scriptBase);
+  const scriptBase = new URL('./', document.baseURI);
+  const dataBase = scriptBase;
   const dataUrl = file => new URL(String(file).split('/').map(encodeURIComponent).join('/'), dataBase).toString();
   const statusText = byId('statusText');
   const departmentList = byId('departmentList');
@@ -330,7 +330,7 @@
     } catch (e) {
       console.error('Ошибка загрузки карты', e);
       setStatus('Ошибка загрузки карты. Откройте страницу через HTTP(S), а не как файл.');
-      departmentList.textContent = 'Не удалось прочитать список данных. Проверьте data/manifest.json.';
+      departmentList.textContent = 'Не удалось прочитать список данных. Проверьте manifest.json.';
     }
   }
   init();
