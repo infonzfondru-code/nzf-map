@@ -187,3 +187,29 @@
   flex: 0 0 9px; width: 9px; height: 9px; border-radius: 50%;
   box-shadow: 0 0 0 1px rgba(0,0,0,.09);
 }
+
+/* Adaptive region -> local group -> polygon overview badges. */
+#nzf-yandex-widget .nzf-summary-bubble {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 48px;
+  height: 48px;
+  min-width: 48px;
+  border-radius: 50%;
+  border: 3px solid #ffffff;
+  background: #2679b9;
+  color: #ffffff;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1;
+  text-align: center;
+  box-shadow: 0 3px 13px rgba(29, 83, 133, .25);
+  cursor: pointer;
+  user-select: none;
+}
+#nzf-yandex-widget .nzf-summary-bubble:hover {
+  background: #185e99;
+  transform: scale(1.08);
+}

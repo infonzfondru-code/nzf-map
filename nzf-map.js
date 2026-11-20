@@ -3,6 +3,13 @@
   'use strict';
 
   var ROOT = 'https://infonzfondru-code.github.io/nzf-map/';
+  // A maintained local copy can be uploaded as regions.geojson. Until then,
+  // obtain an administrative-region reference layer from Click That Hood.
+  // Boundary data are for visualization, not official cadastral decisions.
+  var REGIONS_FALLBACK = 'https://raw.githubusercontent.com/codeforgermany/click_that_hood/main/public/data/russia.geojson';
+  var REGION_MAX_ZOOM = 5;
+  var GROUP_MAX_ZOOM = 8;
+
   var host = document.getElementById('nzf-yandex-widget');
   if (!host || host.dataset.nzfStarted === '1') return;
   host.dataset.nzfStarted = '1';
@@ -66,7 +73,15 @@
     manifestReady: false,
     hitMenuOpen: false,
     ignoreMapClickUntil: 0,
-    lastPointer: null
+    lastPointer: null,
+    regions: null,
+    regionLoading: null,
+    regionError: false,
+    summaryLayer: null,
+    summaryLayout: null,
+    zoomMode: null,
+    redrawTimer: null,
+    redrawGeneration: 0
   };
 
   function balloon(f, spec) {
@@ -321,6 +336,302 @@
     showHitMenu(hits, localPixels);
   }
 
+  // Return one representative location for each original feature.
+  // Every feature contributes once to counts, even if it has multiple contours.
+  function ringCentroid(ring) {
+    var area2 = 0, x = 0, y = 0;
+    for (var i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+      var a = ring[j], b = ring[i], cross = a[0] * b[1] - b[0] * a[1];
+      area2 += cross;
+      x += (a[0] + b[0]) * cross;
+      y += (a[1] + b[1]) * cross;
+    }
+    if (Math.abs(area2) < 1e-9) return null;
+    return [x / (3 * area2), y / (3 * area2)];
+  }
+
+  function featurePoint(feature) {
+    var shapes = parts(feature.geometry);
+    var winner = null;
+    var winnerArea = -1;
+    for (var i = 0; i < shapes.length; i++) {
+      var p = shapes[i];
+      if (p.type === 'polygon' && p.coords.length && p.coords[0].length >= 4) {
+        var ring = p.coords[0];
+        var ar = 0;
+        for (var k = 1; k < ring.length; k++) {
+          ar += ring[k - 1][0] * ring[k][1] - ring[k][0] * ring[k - 1][1];
+        }
+        if (Math.abs(ar) > winnerArea) {
+          winnerArea = Math.abs(ar);
+          var center = ringCentroid(ring);
+          if (!center || !pointInPolygon(center, p.coords)) {
+            // Choose a point from the inside of an ordinary edge, moved towards
+            // the ring's average. Handles concave/elongated polygons more safely.
+            var avg = [0, 0], limit = Math.min(ring.length - 1, 32);
+            for (var t = 0; t < limit; t++) {
+              avg[0] += ring[t][0]; avg[1] += ring[t][1];
+            }
+            avg = [avg[0] / limit, avg[1] / limit];
+            center = pointInPolygon(avg, p.coords) ? avg : ring[Math.floor(ring.length / 3)].slice(0, 2);
+          }
+          winner = center;
+        }
+      } else if (!winner && p.type === 'point') winner = p.coords.slice(0, 2);
+      else if (!winner && p.type === 'line' && p.coords.length) winner = p.coords[Math.floor(p.coords.length / 2)].slice(0, 2);
+    }
+    if (!winner || !Number.isFinite(winner[0]) || !Number.isFinite(winner[1])) return null;
+    return (winner[0] >= 19 && winner[0] <= 180 && winner[1] >= 35 && winner[1] <= 79) ? winner : null;
+  }
+
+  function geometryBBox(rings) {
+    var minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    (rings[0] || []).forEach(function (p) {
+      if (p[0] < minX) minX = p[0];
+      if (p[0] > maxX) maxX = p[0];
+      if (p[1] < minY) minY = p[1];
+      if (p[1] > maxY) maxY = p[1];
+    });
+    return [minX, minY, maxX, maxY];
+  }
+
+  function prepareRegions(data) {
+    if (!data || !Array.isArray(data.features) || !data.features.length) {
+      throw new Error('В справочнике нет границ регионов');
+    }
+    var items = data.features.map(function (feature, index) {
+      var properties = feature.properties || {};
+      var name = properties.name || properties.NAME_1 || properties.NAME || ('Регион ' + (index + 1));
+      return {
+        id: String(properties.id || properties.cartodb_id || name || index),
+        name: String(name),
+        parts: parts(feature.geometry).filter(function (g) {
+          return g.type === 'polygon' && g.coords.length;
+        }).map(function (g) {
+          return { rings: g.coords, bbox: geometryBBox(g.coords) };
+        })
+      };
+    }).filter(function (r) { return r.parts.length; });
+    if (!items.length) throw new Error('В файле нет полигональных границ регионов');
+    return items;
+  }
+
+  function belongsToRegion(point, region) {
+    return region.parts.some(function (poly) {
+      var b = poly.bbox;
+      return point[0] >= b[0] && point[0] <= b[2] &&
+        point[1] >= b[1] && point[1] <= b[3] &&
+        pointInPolygon(point, poly.rings);
+    });
+  }
+
+  function findRegion(point) {
+    if (!point || !state.regions) return null;
+    for (var i = 0; i < state.regions.length; i++) {
+      if (belongsToRegion(point, state.regions[i])) return state.regions[i];
+    }
+    return null;
+  }
+
+  async function loadRegionBoundaries() {
+    if (state.regions) return state.regions;
+    if (state.regionLoading) return state.regionLoading;
+    state.regionLoading = (async function () {
+      var local = ROOT + 'regions.geojson';
+      var data, response;
+      try {
+        response = await fetch(local);
+        if (!response.ok) throw new Error('локальная копия недоступна');
+        data = await response.json();
+      } catch (ignored) {
+        response = await fetch(REGIONS_FALLBACK);
+        if (!response.ok) throw new Error('HTTP ' + response.status);
+        data = await response.json();
+      }
+      state.regions = prepareRegions(data);
+      // Classify cached records; subsequent years use the same region index.
+      state.entries.forEach(function (list) {
+        list.forEach(function (entry) {
+          entry.region = findRegion(entry.anchor);
+        });
+      });
+      return state.regions;
+    })().catch(function (err) {
+      state.regionError = true;
+      status('Границы регионов недоступны; показаны исходные контуры. ' + err.message);
+      console.warn('НЗФ: справочник регионов не загрузился', err);
+      return null;
+    });
+    return state.regionLoading;
+  }
+
+  function summaryMode() {
+    if (!state.map || state.regionError) return 'shapes';
+    var z = state.map.getZoom();
+    return z <= REGION_MAX_ZOOM ? 'regions' : (z <= GROUP_MAX_ZOOM ? 'groups' : 'shapes');
+  }
+
+  function visibleEntriesWithRegion() {
+    return visibleEntries().filter(function (entry) { return entry.anchor && entry.region; });
+  }
+
+  function selectBubblePoint(records) {
+    var x = 0, y = 0;
+    records.forEach(function (r) { x += r.anchor[0]; y += r.anchor[1]; });
+    var average = [x / records.length, y / records.length];
+    // Bubble stays on a surveyed site instead of an arbitrary offshore mean.
+    var best = records[0], bestD = Infinity;
+    records.forEach(function (r) {
+      var d = Math.pow(r.anchor[0] - average[0], 2) + Math.pow(r.anchor[1] - average[1], 2);
+      if (d < bestD) { bestD = d; best = r; }
+    });
+    return [best.anchor[1], best.anchor[0]];
+  }
+
+  function projectPoint(point, zoom) {
+    var projection = state.map.options.get('projection');
+    return projection.toGlobalPixels([point[1], point[0]], zoom);
+  }
+
+  function groupRecords(records, zoom) {
+    var groups = new Map();
+    // The grid changes with zoom but never joins objects from two subjects.
+    var cell = zoom <= 6 ? 175 : (zoom === 7 ? 145 : 120);
+    records.forEach(function (r) {
+      var px = projectPoint(r.anchor, zoom);
+      var key = r.region.id + ':' + Math.floor(px[0] / cell) + ':' + Math.floor(px[1] / cell);
+      if (!groups.has(key)) groups.set(key, { region: r.region, records: [] });
+      groups.get(key).records.push(r);
+    });
+    // Nearby occupied cells may otherwise overlap visually. Merge them inside
+    // the same region until circles have adequate spacing on screen.
+    var array = Array.from(groups.values());
+    var changed = true, rounds = 0;
+    while (changed && rounds++ < 30) {
+      changed = false;
+      outer: for (var i = 0; i < array.length; i++) {
+        for (var j = i + 1; j < array.length; j++) {
+          if (array[i].region.id !== array[j].region.id) continue;
+          var a = projectPoint([selectBubblePoint(array[i].records)[1], selectBubblePoint(array[i].records)[0]], zoom);
+          var b = projectPoint([selectBubblePoint(array[j].records)[1], selectBubblePoint(array[j].records)[0]], zoom);
+          if (Math.hypot(a[0] - b[0], a[1] - b[1]) < 84) {
+            array[i].records.push.apply(array[i].records, array[j].records);
+            array.splice(j, 1);
+            changed = true;
+            break outer;
+          }
+        }
+      }
+    }
+    // Keep the map legible: only a few circles in each region at medium zoom.
+    var cap = zoom <= 6 ? 4 : (zoom === 7 ? 8 : 12);
+    var byRegion = new Map();
+    array.forEach(function (g) {
+      var id = g.region.id;
+      if (!byRegion.has(id)) byRegion.set(id, []);
+      byRegion.get(id).push(g);
+    });
+    var limited = [];
+    byRegion.forEach(function (candidates) {
+      while (candidates.length > cap) {
+        var minDist = Infinity, pickA = 0, pickB = 1;
+        var px = candidates.map(function (g) {
+          var point = selectBubblePoint(g.records);
+          return projectPoint([point[1], point[0]], zoom);
+        });
+        for (var i = 0; i < candidates.length; i++) {
+          for (var j = i + 1; j < candidates.length; j++) {
+            var d = Math.pow(px[i][0] - px[j][0], 2) + Math.pow(px[i][1] - px[j][1], 2);
+            if (d < minDist) { minDist = d; pickA = i; pickB = j; }
+          }
+        }
+        candidates[pickA].records.push.apply(candidates[pickA].records, candidates[pickB].records);
+        candidates.splice(pickB, 1);
+      }
+      limited.push.apply(limited, candidates);
+    });
+    return limited;
+  }
+
+  function paintSummary() {
+    if (!state.map || !state.regions) return;
+    var mode = summaryMode();
+    if (mode === 'shapes') return;
+    if (!state.summaryLayout) {
+      state.summaryLayout = ymaps.templateLayoutFactory.createClass(
+        '<div class="nzf-summary-bubble">$[properties.clusterCount]</div>'
+      );
+    }
+    var entries = visibleEntriesWithRegion();
+    var groups;
+    if (mode === 'regions') {
+      var bins = new Map();
+      entries.forEach(function (entry) {
+        var region = entry.region;
+        if (!bins.has(region.id)) bins.set(region.id, { region: region, records: [] });
+        bins.get(region.id).records.push(entry);
+      });
+      groups = Array.from(bins.values());
+    } else groups = groupRecords(entries, state.map.getZoom());
+
+    var collection = new ymaps.GeoObjectCollection();
+    groups.forEach(function (g) {
+      var n = g.records.length;
+      var at = selectBubblePoint(g.records);
+      var description = g.region.name + ': ' + n + ' объект' + (n % 10 === 1 && n % 100 !== 11 ? '' : 'ов');
+      var bubble = new ymaps.Placemark(at,
+        { clusterCount: n, hintContent: description },
+        { iconLayout: state.summaryLayout, iconShape: { type: 'Circle', coordinates: [0, 0], radius: 24 },
+          iconOffset: [-24, -24], openBalloonOnClick: false, zIndex: 110 }
+      );
+      bubble.events.add('click', function (event) {
+        if (event.preventDefault) event.preventDefault();
+        state.ignoreMapClickUntil = Date.now() + 350;
+        hideHitMenu();
+        var targetZoom = mode === 'regions' ? 6 : 10;
+        var coords = selectBubblePoint(g.records);
+        state.map.setCenter(coords, targetZoom, { duration: 250 });
+      });
+      collection.add(bubble);
+    });
+    state.summaryLayer = collection;
+    state.map.geoObjects.add(collection);
+    var unknown = visibleEntries().length - entries.length;
+    if (unknown > 0) {
+      status('Без привязки к субъектам РФ: ' + unknown + ' объект(ов). Проверьте координаты и границы.');
+    } else status('');
+  }
+
+  function renderByZoom() {
+    if (!state.map) return;
+    if (state.summaryLayer) {
+      state.map.geoObjects.remove(state.summaryLayer);
+      state.summaryLayer = null;
+    }
+    var mode = summaryMode();
+    state.layers.forEach(function (layer, key) {
+      var wantShapes = mode === 'shapes' && state.selected.has(key);
+      if (wantShapes && !state.visible.has(key)) {
+        state.map.geoObjects.add(layer);
+        state.visible.add(key);
+      } else if (!wantShapes && state.visible.has(key)) {
+        state.map.geoObjects.remove(layer);
+        state.visible.delete(key);
+      }
+    });
+    if (mode !== 'shapes') {
+      if (!state.regions && !state.regionError) {
+        status('Подготовка карты регионов…');
+        loadRegionBoundaries().then(function () { renderByZoom(); });
+      } else if (state.regions) paintSummary();
+    }
+  }
+
+  function queueRender() {
+    if (state.redrawTimer) clearTimeout(state.redrawTimer);
+    state.redrawTimer = setTimeout(renderByZoom, 100);
+  }
+
   function makeObjects(feature, spec, entry) {
     var result = [];
     var props = {
@@ -397,7 +708,8 @@
 
       for (var i = 0; i < (fc.features || []).length; i++) {
         var f = fc.features[i];
-        var entry = { feature: f, objects: [], spec: spec };
+        var entry = { feature: f, objects: [], spec: spec, anchor: featurePoint(f), region: null };
+        if (state.regions) entry.region = findRegion(entry.anchor);
         var objects = makeObjects(f, spec, entry);
         objects.forEach(function (obj) { group.add(obj); });
         if (objects.length) entries.push(entry);
@@ -419,8 +731,8 @@
 
     var layer = state.layers.get(spec.key);
     if (!on) {
-      if (layer) showCollection(spec, layer);
       updateCount();
+      queueRender();
       hideHitMenu();
       return;
     }
@@ -433,10 +745,10 @@
     try {
       status('Загрузка объектов за ' + spec.year + ' год…');
       layer = layer || await getLayer(spec);
-      showCollection(spec, layer);
       updateCount();
-      status('');
-      if (!noFit && state.selected.size === 1) fit();
+      queueRender();
+      // Keep the overview of Russia. Zoom only when a visitor clicks a bubble
+      // or the home/fit button; selecting a year must not jump the map.
     } catch (err) {
       state.selected.delete(spec.key);
       var c = host.querySelector('input[data-key="' + spec.key + '"]');
@@ -587,6 +899,9 @@
           handleCoordinateClick(point, eventLocalPixels(e, point));
             });
             state.map.events.add('actionbegin', hideHitMenu);
+            state.map.events.add('boundschange', function (e) {
+              if (e.get('newZoom') !== e.get('oldZoom')) queueRender();
+            });
             document.addEventListener('pointerdown', function (e) {
               if (!host.contains(e.target)) hideHitMenu();
             });
@@ -598,7 +913,7 @@
             if (recent) {
               var checkbox = host.querySelector('input[data-key="' + recent.key + '"]');
               if (checkbox) checkbox.checked = true;
-              toggle(recent, true);
+              toggle(recent, true, true);
             }
           } catch (err) {
             status('Ошибка инициализации карты: ' + err.message);
