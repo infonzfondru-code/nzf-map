@@ -596,10 +596,14 @@
     });
     state.summaryLayer = collection;
     state.map.geoObjects.add(collection);
+    // Objects outside the loaded administrative boundaries are excluded from
+    // regional totals. This is internal data QA, not a public-facing notice.
     var unknown = visibleEntries().length - entries.length;
-    if (unknown > 0) {
-      status('Без привязки к субъектам РФ: ' + unknown + ' объект(ов). Проверьте координаты и границы.');
-    } else status('');
+    if (unknown > 0 && state.lastUnassignedCount !== unknown) {
+      console.info('НЗФ: объектов вне границ справочника регионов:', unknown);
+    }
+    state.lastUnassignedCount = unknown;
+    status('');
   }
 
   function renderByZoom() {
