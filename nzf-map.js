@@ -59,7 +59,8 @@
     'Контракт_N_договора': 'Контракт / № договора',
     'Площадь_га': 'Площадь, га',
     'Детализация_см_пикс': 'Детализация, см/пикс',
-    'Масштаб': 'Масштаб'
+    'Масштаб': 'Масштаб',
+    'Муниципальное_образование': 'Муниципальное образование'
   };
 
   var state = {
@@ -215,7 +216,7 @@
       strong.textContent = p.name || fields['Название'] || 'Объект';
       var small = document.createElement('small');
       var attrs = (entry.feature.properties || {}).fields || {};
-      var details = [attrs['Вид_работ'], entry.spec.year + ' год', attrs['Площадь_га'] ? attrs['Площадь_га'] + ' га' : ''];
+      var details = [attrs['Вид_работ'], entry.spec.year + ' год', attrs['Контракт_N_договора'] ? '№ ' + attrs['Контракт_N_договора'] : '', attrs['Площадь_га'] ? attrs['Площадь_га'] + ' га' : ''];
       small.textContent = details.filter(Boolean).join(' · ');
 
       button.append(strong, small);
@@ -798,10 +799,11 @@
       heading.type = 'button';
       heading.className = 'nzf-department-head';
       heading.textContent = dept.title;
-      heading.setAttribute('aria-expanded', 'true');
+      heading.setAttribute('aria-expanded', dept.id === 'geodesy' ? 'true' : 'false');
 
       var body = document.createElement('div');
       body.className = 'nzf-department-body';
+      body.hidden = dept.id !== 'geodesy';
 
       var years = document.createElement('div');
       years.className = 'nzf-years';
